@@ -1,0 +1,42 @@
+FROM agency-dashboard-*:cdm_vuln_trending
+
+WHERE vulnerability_finding.cve.severity == "MEDIUM" and host.type == "ENDPOINT - WORKSTATION"
+and case(vulnerability_finding.kev.in_catalog==true, 1, 0) == 0
+and organization.tier0_id == "DOS"
+eval p_timestamp=date_format("yyyy-MM-dd-hh-mm-ss", trending_timestamp)
+eval p_due_date = date_format("yyyy-MM-dd'T'hh:mm:ss", host.first_found_date+60 days)
+eval p_remediate = case(vulnerability_finding.remediated==true, 1, 0)
+eval p_kev_in_catalog = case(vulnerability_finding.kev.in_catalog==true, 1, 0)
+eval p_days_to_remediate = coalesce(round(vulnerability_finding.hours_to_remediate / 24.0), 0)
+eval comb_timestamp= CONCAT(p_timestamp,"$", TO_STRING(p_due_date))
+eval comb_timestamp= CONCAT(comb_timestamp,"$", TO_STRING(p_remediate))
+eval comb_timestamp= CONCAT(comb_timestamp,"$", TO_STRING(p_kev_in_catalog))
+eval comb_timestamp= CONCAT(comb_timestamp,"$", TO_STRING(p_days_to_remediate))
+stats max_timestamp =max(comb_timestamp) by cdm_doc_id, organization.tier0_id, host.category, host.type
+eval p_due_date = SUBSTRING(TO_STRING(max_timestamp), 21, 19)
+eval p_remediate = TO_INTEGER(SUBSTRING(TO_STRING(max_timestamp), 41, 1))
+eval p_kev_in_catalog = TO_INTEGER(SUBSTRING(TO_STRING(max_timestamp), 43, 1))
+eval p_days_to_remediate = TO_INTEGER(SUBSTRING(TO_STRING(max_timestamp), 45))
+eval p_due_date = TO_DATETIME(p_due_date)
+EVAL meets_criteria = CASE(p_days_to_remediate <= 60 AND p_days_to_remediate >=0 and p_remediate == 1, cdm_doc_id, NULL)
+, late_remediated = CASE(p_days_to_remediate > 60 and p_remediate == 1, cdm_doc_id, NULL)
+, not_remediated = CASE(p_due_date < now() and p_remediate == 0, cdm_doc_id, NULL)
+WHERE p_kev_in_catalog == 0
+eval p_kev_in_catalog = false
+STATS pulled_date= max(date_format("MM-dd-yyyy", now()))
+, on_time_reme = COUNT_DISTINCT(meets_criteria)
+, total_remediated = COUNT_DISTINCT(late_remediated) + COUNT_DISTINCT(meets_criteria)
+, total_vulns = count_distinct(cdm_doc_id)
+, late_reme = COUNT_DISTINCT(late_remediated)
+, not_reme = COUNT_DISTINCT(not_remediated)
+, total_vulns_due = COUNT_DISTINCT(meets_criteria) + COUNT_DISTINCT(late_remediated) + COUNT_DISTINCT(not_remediated)
+by organization.tier0_id
+, p_kev_in_catalog
+, host.category
+, host.type
+EVAL vulnerability_findingcveseverity = "MEDIUM"
+RENAME host.category as hostcategory
+, host.type as hosttype
+, pulled_date as PulledDate
+, organization.tier0_id as Organization
+LIMIT 10000
